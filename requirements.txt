@@ -1,0 +1,5 @@
+numpy>=1.22
+matplotlib>=3.5
+pillow>=9.0        # only needed for --yolo image export
+# soundfile>=0.12  # optional: float/WAVEX support; stdlib handles PCM without it
+openpyxl>=3.0     # .xlsx workbook export; --csv works without it

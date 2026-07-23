@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+*.swp
+
+# Runtime state written to the user's home is not here, but local test outputs
+# and sample media should not be committed:
+out/
+*.wav
+!examples/*.wav

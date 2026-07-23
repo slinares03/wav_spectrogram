@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Launcher for the wav_spectrogram player — a thin wrapper over
+#   python -m wav_spectrogram
+# so the README's `./wav-player ...` works from the project root without the
+# caller having to know the package layout. All arguments are passed through.
+#
+# The package directory is this script's own directory; running it as a module
+# needs that directory's *parent* on the path, so we invoke from there.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+pkg="$(basename "$here")"
+parent="$(dirname "$here")"
+
+# Put the package's parent on the import path rather than cd-ing there, so that
+# any relative WAV path the user passed still resolves against their own cwd.
+export PYTHONPATH="$parent${PYTHONPATH:+:$PYTHONPATH}"
+exec "${PYTHON:-python3}" -m "$pkg" "$@"
