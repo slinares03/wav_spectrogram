@@ -4,15 +4,34 @@
 # so the README's `./wav-player ...` works from the project root without the
 # caller having to know the package layout. All arguments are passed through.
 #
-# The package directory is this script's own directory; running it as a module
-# needs that directory's *parent* on the path, so we invoke from there.
+# First run bootstraps everything: it creates an isolated virtual environment
+# (.venv) inside the project and installs the dependencies, so a fresh clone
+# starts with a single `./wav-player --view 3d` and no manual pip step. Later
+# runs reuse that environment and start immediately.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pkg="$(basename "$here")"
 parent="$(dirname "$here")"
+venv="$here/.venv"
+py="${PYTHON:-python3}"
+vpy="$venv/bin/python"
+
+# First run: build the environment and install requirements.
+if [ ! -x "$vpy" ]; then
+    echo "First run: setting up a local environment in .venv (one-time)…"
+    "$py" -m venv "$venv"
+    "$vpy" -m pip install --quiet --upgrade pip
+    "$vpy" -m pip install --quiet -r "$here/requirements.txt"
+    echo "Setup complete."
+fi
+
+# Guard against a half-finished setup or an updated requirements.txt: if the
+# core deps are missing, (re)install rather than crashing with an ImportError.
+"$vpy" -c "import numpy, matplotlib" 2>/dev/null || \
+    "$vpy" -m pip install --quiet -r "$here/requirements.txt"
 
 # Put the package's parent on the import path rather than cd-ing there, so that
 # any relative WAV path the user passed still resolves against their own cwd.
 export PYTHONPATH="$parent${PYTHONPATH:+:$PYTHONPATH}"
-exec "${PYTHON:-python3}" -m "$pkg" "$@"
+exec "$vpy" -m "$pkg" "$@"

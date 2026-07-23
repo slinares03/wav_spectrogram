@@ -45,13 +45,36 @@ never misread as complex baseband. Be explicit when it matters.
 
 ## Install
 
+**Prerequisite: Python 3.** That is the only thing you install by hand — the
+launcher installs the Python packages itself, but it cannot install Python.
+
+* **macOS / Linux** — usually already present. Check with `python3 --version`;
+  if missing, install from [python.org](https://www.python.org/downloads/) or
+  your package manager (`brew install python`, `sudo apt install python3
+  python3-venv`).
+* **Windows** — install from [python.org/downloads](https://www.python.org/downloads/)
+  and, on the first installer screen, tick **“Add python.exe to PATH”** so
+  `.\wav-player` can find it. Verify in a new terminal with `python --version`.
+
+Then nothing else to do by hand — the launcher sets itself up. The first time
+you run `./wav-player` (or `.\wav-player` on Windows) it creates an isolated
+virtual environment in `.venv/` and installs the dependencies, then starts;
+every run after that reuses it and starts immediately.
+
 ```bash
-pip install -r wav_spectrogram/requirements.txt
+./wav-player --view 3d          # first run: auto-installs, then plays
 ```
 
-`numpy` + `matplotlib` are required; `pillow` only for `--yolo`. `soundfile` is
-optional — without it the stdlib decoder handles PCM 8/16/24/32-bit WAV, with it
-you also get float and WAVEX files.
+Prefer to manage the environment yourself? The manual equivalent is:
+
+```bash
+pip install -r requirements.txt
+python -m wav_spectrogram --view 3d
+```
+
+`numpy` + `matplotlib` are required; `pillow` only for `--yolo`; `openpyxl` for
+`.xlsx` export. `soundfile` is optional — without it the stdlib decoder handles
+PCM 8/16/24/32-bit WAV, with it you also get float and WAVEX files.
 
 ## Use
 
