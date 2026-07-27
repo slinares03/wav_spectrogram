@@ -17,8 +17,9 @@ music file would be nonsense as IQ, so auto resolves 2-channel to audio unless
 --center was given or the filename hints at IQ. Be explicit with --mode when it
 matters.
 
-stdlib `wave` is the baseline decoder (PCM 8/16/24/32). If `soundfile` is
-installed it is used instead, which additionally handles float WAV and WAVEX.
+stdlib `wave` is the baseline decoder (PCM 8/16/24/32), with a small built-in
+RIFF parser covering the float and WAVE_FORMAT_EXTENSIBLE files it rejects. If
+`soundfile` is installed it is used instead, for wider format coverage still.
 """
 
 from __future__ import annotations
@@ -34,9 +35,16 @@ import numpy as np
 _IQ_HINT = re.compile(r"(^|[_\-.])(iq|baseband|complex)([_\-.]|$)", re.IGNORECASE)
 
 
-def _pcm_to_float(raw: bytes, sampwidth: int, n_channels: int) -> np.ndarray:
+def _pcm_to_float(raw: bytes, sampwidth: int, n_channels: int,
+                  is_float: bool = False) -> np.ndarray:
     """Decode interleaved PCM bytes to float32 in [-1, 1), shape (frames, ch)."""
-    if sampwidth == 1:
+    if is_float:
+        # IEEE float samples are already in [-1, 1]; only the width varies.
+        dtype = {4: "<f4", 8: "<f8"}.get(sampwidth)
+        if dtype is None:
+            raise ValueError(f"Unsupported float sample width: {sampwidth} bytes")
+        data = np.frombuffer(raw, dtype=dtype).astype(np.float32)
+    elif sampwidth == 1:
         # 8-bit WAV is unsigned, offset by 128 — every other width is signed.
         data = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
     elif sampwidth == 2:
@@ -53,6 +61,95 @@ def _pcm_to_float(raw: bytes, sampwidth: int, n_channels: int) -> np.ndarray:
     else:
         raise ValueError(f"Unsupported PCM sample width: {sampwidth} bytes")
     return data.reshape(-1, n_channels)
+
+
+class _RiffReader:
+    """Minimal WAV reader for the formats stdlib `wave` rejects.
+
+    `wave` only decodes wFormatTag 1 (integer PCM), so float files (tag 3) and
+    WAVE_FORMAT_EXTENSIBLE (tag 0xFFFE, emitted by many SDR and DAW tools) fail
+    with "unknown format". This walks the RIFF chunks directly and exposes the
+    same handful of methods WavSource uses, plus `is_float`.
+    """
+
+    _PCM, _FLOAT, _EXTENSIBLE = 0x0001, 0x0003, 0xFFFE
+
+    def __init__(self, path: str):
+        self._f = open(path, "rb")
+        try:
+            self._parse_header()
+        except Exception:
+            self._f.close()
+            raise
+
+    def _parse_header(self) -> None:
+        head = self._f.read(12)
+        if len(head) < 12 or head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+            raise ValueError("not a RIFF/WAVE file")
+
+        fmt = None
+        while True:
+            hdr = self._f.read(8)
+            if len(hdr) < 8:
+                raise ValueError("WAV has no data chunk")
+            cid, size = hdr[:4], int.from_bytes(hdr[4:8], "little")
+            if cid == b"fmt ":
+                fmt = self._f.read(size)
+                self._f.seek(size % 2, 1)       # chunks are word-aligned
+            elif cid == b"data":
+                if fmt is None:
+                    raise ValueError("WAV data chunk precedes fmt chunk")
+                self._data_start = self._f.tell()
+                self._data_size = size
+                break
+            else:
+                self._f.seek(size + size % 2, 1)
+
+        tag, self._n_channels, self._rate = int.from_bytes(fmt[0:2], "little"), \
+            int.from_bytes(fmt[2:4], "little"), int.from_bytes(fmt[4:8], "little")
+        bits = int.from_bytes(fmt[14:16], "little")
+        if tag == self._EXTENSIBLE:
+            # The real format lives in the first 2 bytes of the GUID subformat.
+            if len(fmt) < 26:
+                raise ValueError("truncated WAVE_FORMAT_EXTENSIBLE header")
+            tag = int.from_bytes(fmt[24:26], "little")
+        if tag not in (self._PCM, self._FLOAT):
+            raise ValueError(f"unsupported WAV format tag: {tag}")
+
+        self.is_float = tag == self._FLOAT
+        self._sampwidth = bits // 8
+        if self._sampwidth == 0 or self._n_channels == 0:
+            raise ValueError("invalid WAV fmt chunk")
+        self._frame_size = self._sampwidth * self._n_channels
+        # A streamed file can declare size 0 or overshoot; trust the file length.
+        avail = max(0, self._f.seek(0, 2) - self._data_start)
+        if not 0 < self._data_size <= avail:
+            self._data_size = avail
+        self._f.seek(self._data_start)
+        self._pos = 0
+
+    def getframerate(self) -> int:
+        return self._rate
+
+    def getnchannels(self) -> int:
+        return self._n_channels
+
+    def getnframes(self) -> int:
+        return self._data_size // self._frame_size
+
+    def getsampwidth(self) -> int:
+        return self._sampwidth
+
+    def readframes(self, n: int) -> bytes:
+        want = min(n * self._frame_size, self._data_size - self._pos)
+        if want <= 0:
+            return b""
+        raw = self._f.read(want)
+        self._pos += len(raw)
+        return raw[:len(raw) - len(raw) % self._frame_size]
+
+    def close(self) -> None:
+        self._f.close()
 
 
 class WavSource:
@@ -81,7 +178,13 @@ class WavSource:
             self.n_frames = int(self._sf.frames)
             self._sampwidth = None
         except ImportError:
-            self._wav = wave.open(str(self.path), "rb")
+            try:
+                self._wav = wave.open(str(self.path), "rb")
+                self._is_float = False
+            except wave.Error:
+                # Float / WAVEX files that stdlib `wave` refuses to open.
+                self._wav = _RiffReader(str(self.path))
+                self._is_float = self._wav.is_float
             self.sample_rate = self._wav.getframerate()
             self.n_channels = self._wav.getnchannels()
             self.n_frames = self._wav.getnframes()
@@ -114,7 +217,7 @@ class WavSource:
         raw = self._wav.readframes(n)
         if not raw:
             return None
-        return _pcm_to_float(raw, self._sampwidth, self.n_channels)
+        return _pcm_to_float(raw, self._sampwidth, self.n_channels, self._is_float)
 
     def blocks(self, block_size: int) -> Iterator[np.ndarray]:
         """Yield 1-D blocks: complex64 when is_iq, else float32 mono.
